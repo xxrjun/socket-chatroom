@@ -3,6 +3,7 @@ import socket
 import threading
 import logging
 import time
+import platform
 import tkinter as tk
 from tkinter import simpledialog, scrolledtext
 from chat.core.config import (
@@ -99,7 +100,19 @@ class ChatClient:
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         # allow multiple clients on same machine
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        system = platform.system()
+        if system == "Windows":
+            try:
+                self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            except AttributeError:
+                logger.warning("SO_REUSEADDR not supported on this system.")
+        else: # Unix-like systems
+            try:
+                self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if hasattr(socket, 'SO_REUSEPORT'):
+                    self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except AttributeError:
+                logger.warning("SO_REUSEPORT not supported on this system.")
         self.udp_socket.bind(("", UDP_PORT))
         threading.Thread(target=self.listen_udp, daemon=True).start()
         threading.Thread(target=self.connect_to_server, daemon=True).start()
@@ -119,7 +132,7 @@ class ChatClient:
             except socket.error:
                 retries += 1
                 self.append_chat(
-                    f"[System] Connection failed. Retrying: {retries}/{MAX_RETRIES}"
+                    f"[System] Connection failed. Retrying connect to server {CLIENT_HOST}:{TCP_PORT}: {retries}/{MAX_RETRIES}"
                 )
                 time.sleep(RECONNECT_DELAY)
 

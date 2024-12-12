@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Network Configurations
 SERVER_HOST = os.environ.get("CHAT_SERVER_HOST", "0.0.0.0")

@@ -1,8 +1,9 @@
 import struct
 import logging
+from enum import Enum
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
-from chat.core.config import BUFFER_SIZE
+from chat.core.config import BUFFER_SIZE, SECRET_KEY, IV
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,15 @@ def pack_message(msg_bytes):
     return struct.pack("!I", length) + msg_bytes
 
 
+def send_message(conn, message):
+    encrypted = encrypt_message(SECRET_KEY, IV, message.encode("utf-8"))
+    msg = pack_message(encrypted)
+    try:
+        conn.sendall(msg)
+    except Exception as e:
+        logger.warning(f"Failed to send message: {e}")
+
+
 # ref: https://docs.python.org/zh-tw/3.12/howto/sockets.html
 def recv_message(conn, buffer_size=BUFFER_SIZE):
     """Receive message from connection. First 4 bytes is the length of the message and the rest is the message itself.
@@ -60,3 +70,9 @@ def recv_message(conn, buffer_size=BUFFER_SIZE):
         return data
     except:
         return None
+
+
+class ChatState(Enum):
+    MANUAL_KICKED = "MANUAL_KICKED"
+    IDLE_TIMEOUT = "IDLE_TIMEOUT"
+    SERVER_SHUTDOWN = "SERVER_SHUTDOWN"

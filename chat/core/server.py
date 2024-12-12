@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 import logging
+from datetime import datetime
 from chat.utils.loggings import setup_logging
 import tkinter as tk
 from tkinter import ttk
@@ -18,6 +19,8 @@ from chat.utils.protocols import (
     decrypt_message,
     pack_message,
     recv_message,
+    send_message,
+    ChatState,
 )
 
 setup_logging()
@@ -31,16 +34,9 @@ running = True
 server_sock = None  # global server socket
 
 
-def send_message(conn, message):
-    encrypted = encrypt_message(SECRET_KEY, IV, message.encode("utf-8"))
-    msg = pack_message(encrypted)
-    try:
-        conn.sendall(msg)
-    except Exception as e:
-        logger.warning(f"Failed to send message: {e}")
-
-
 def broadcast_message(message):
+    timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    message = f"{timestamp} {message}"
     encrypted = encrypt_message(SECRET_KEY, IV, message.encode("utf-8"))
     data = pack_message(encrypted)
     with clients_lock:
@@ -70,13 +66,14 @@ def disconnect_user(username, reason="timeout"):
     with clients_lock:
         if username in clients:
             conn, addr, la, ct = clients[username]
-            if reason == "manual kick":
-                send_message(conn, "KICKED")
+            if reason in (ChatState.MANUAL_KICKED, ChatState.IDLE_TIMEOUT):
+                reason = reason.value
+                send_message(conn, reason)
             logger.info(f"Disconnecting {username}, Reason: {reason}")
             try:
                 conn.close()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error disconnecting {username}: {e}")
             del clients[username]
 
 
@@ -107,7 +104,7 @@ def monitor_idle():
     while running:
         idle_users = get_idle_users()
         for u in idle_users:
-            disconnect_user(u, "idle timeout")
+            disconnect_user(u, ChatState.IDLE_TIMEOUT)
         time.sleep(10)
 
 
@@ -237,7 +234,7 @@ class ServerMonitorGUI:
         item = selection[0]
         vals = self.tree.item(item, "values")
         username = vals[0]
-        disconnect_user(username, "manual kick")
+        disconnect_user(username, ChatState.MANUAL_KICKED)
         broadcast_message(f"{username} was kicked by the admin.")
 
     def do_broadcast(self):
@@ -259,6 +256,7 @@ class ServerMonitorGUI:
 
 def server_thread():
     global running, server_sock
+    logging.info(f"Starting server on {SERVER_HOST}:{TCP_PORT}")
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind((SERVER_HOST, TCP_PORT))

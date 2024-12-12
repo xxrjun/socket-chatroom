@@ -16,10 +16,10 @@ from chat.core.config import (
     IV,
 )
 from chat.utils.protocols import (
-    encrypt_message,
     decrypt_message,
-    pack_message,
     recv_message,
+    send_message,
+    ChatState,
 )
 
 from chat.utils.loggings import setup_logging
@@ -45,7 +45,7 @@ class ChatClient:
             self.username = username_arg
 
         self.master = master
-        self.master.title("Chat Client")
+        self.master.title(f"Chat Client - {self.username}")
 
         # Main layout: left_frame for online users, right_frame for chat
         main_frame = tk.Frame(self.master)
@@ -73,6 +73,7 @@ class ChatClient:
         self.chat_display.tag_config("system", foreground="green")
         self.chat_display.tag_config("left", foreground="gray")
         self.chat_display.tag_config("broadcast", foreground="red")
+        self.chat_display.tag_config("timestamp", foreground="blue")
 
         # Entry and send button
         entry_frame = tk.Frame(right_frame)
@@ -82,10 +83,10 @@ class ChatClient:
         self.entry.pack(side=tk.LEFT, fill=tk.X, padx=5, expand=True)
         self.entry.bind("<Return>", self.send_message)
 
-        self.send_button = tk.Button(
+        self.send_message_button = tk.Button(
             entry_frame, text="Send", command=self.send_message
         )
-        self.send_button.pack(side=tk.RIGHT, padx=5)
+        self.send_message_button.pack(side=tk.RIGHT, padx=5)
 
         # Network variables
         self.conn = None
@@ -96,23 +97,24 @@ class ChatClient:
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         # https://stackoverflow.com/questions/16217958/why-do-we-need-socketoptions-so-broadcast-to-enable-broadcast
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self.udp_socket.setsockopt(
-            socket.SOL_SOCKET, socket.SO_REUSEADDR, 1
-        )  # allow multiple clients on same machine
+        # allow multiple clients on same machine
+        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.udp_socket.bind(("", UDP_PORT))
         threading.Thread(target=self.listen_udp, daemon=True).start()
         threading.Thread(target=self.connect_to_server, daemon=True).start()
 
     def connect_to_server(self):
+        # FIXME: cannot handle multiple clients at the same time, it will trigger many reconnection attempts
         retries = 0
         while not self.connected and retries < MAX_RETRIES:
             try:
                 self.conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.conn.connect((CLIENT_HOST, TCP_PORT))
-                self.send_raw_message(self.username)
+                send_message(self.conn, self.username)
                 self.connected = True
                 self.append_chat(f"[System] Connected as {self.username}.")
-                threading.Thread(target=self.receive_messages, daemon=True).start()
+                threading.Thread(target=self.receive_message, daemon=True).start()
                 return
             except socket.error:
                 retries += 1
@@ -130,22 +132,17 @@ class ChatClient:
                 "Unable to connect to the server after multiple attempts."
             )
 
-    def send_raw_message(self, text):
-        encrypted = encrypt_message(SECRET_KEY, IV, text.encode("utf-8"))
-        data = pack_message(encrypted)
-        try:
-            self.conn.sendall(data)
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
-            self.connected = False
-
     def send_message(self, event=None):
         msg = self.entry.get()
         if msg.strip():
-            self.send_raw_message(msg)
-            self.entry.delete(0, tk.END)
+            try:
+                send_message(self.conn, msg)
+                self.entry.delete(0, tk.END)
+            except Exception as e:
+                logger.error(f"Error sending message: {e}")
+                self.connected = False
 
-    def receive_messages(self):
+    def receive_message(self):
         while self.connected:
             try:
                 data = recv_message(self.conn)
@@ -160,16 +157,19 @@ class ChatClient:
                     return
                 decrypted = decrypt_message(SECRET_KEY, IV, data).decode("utf-8")
 
-                if decrypted == "KICKED":  # Do not allow reconnection if kicked
-                    self.append_chat("[System] You have been kicked out from the chat.")
+                if decrypted in (
+                    ChatState.MANUAL_KICKED.value,
+                    ChatState.IDLE_TIMEOUT.value,
+                ):  # Do not allow reconnection if kicked
+                    self.append_chat(
+                        f"[System] You have been kicked out from the chat, reason: {decrypted}"
+                    )
                     self.connected = False
                     self.master.after(2000, self.master.destroy)
                     return
 
                 self.append_chat(decrypted)
-            except (
-                Exception
-            ) as e:  # FIXME: 重連機制需要調整，若這邊重連可能會有 infinite loop 的問題
+            except Exception as e:
                 logger.error(f"Error receiving message: {e}")
                 self.connected = False
                 self.append_chat(
@@ -201,6 +201,28 @@ class ChatClient:
     def append_chat(self, text):
         self.chat_display.config(state="normal")
 
+        if text.startswith("["):
+            end_idx = text.find("]")
+            if end_idx != -1:
+                # timestamp
+                timestamp = text[: end_idx + 1]
+                message = text[end_idx + 2 :]
+                self.chat_display.insert(tk.END, timestamp + " ", "timestamp")
+
+                # content
+                if message.startswith("[System]"):
+                    tag = "system"
+                elif "joined the chat." in message or "left the chat." in message:
+                    tag = "left"
+                elif "[Broadcast]" in message:
+                    tag = "broadcast"
+                else:
+                    tag = None
+                self.chat_display.insert(tk.END, message + "\n", tag)
+                self.chat_display.config(state="disabled")
+                self.chat_display.yview(tk.END)
+                return
+
         if text.startswith("[System]"):
             tag = "system"
         elif "joined the chat." in text or "left the chat." in text:
@@ -209,7 +231,6 @@ class ChatClient:
             tag = "broadcast"
         else:
             tag = None
-
         self.chat_display.insert(tk.END, text + "\n", tag)
         self.chat_display.config(state="disabled")
         self.chat_display.yview(tk.END)

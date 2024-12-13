@@ -34,7 +34,7 @@ running = True
 server_sock = None  # global server socket
 
 
-def broadcast_message(message):
+def broadcast_message(message: str):
     timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
     message = f"{timestamp} {message}"
     encrypted = encrypt_message(SECRET_KEY, IV, message.encode("utf-8"))
@@ -62,7 +62,7 @@ def broadcast_presence():
     udp_sock.close()
 
 
-def disconnect_user(username, reason="timeout"):
+def disconnect_user(username: str, reason: ChatState = ChatState.TIMEOUT):
     with clients_lock:
         if username in clients:
             conn, addr, la, ct = clients[username]
@@ -108,7 +108,7 @@ def monitor_idle():
         time.sleep(10)
 
 
-def handle_client(conn, addr):
+def handle_client(conn: socket.socket, addr: tuple):
     username_data = recv_message(conn)
     if username_data is None:
         conn.close()
@@ -145,7 +145,8 @@ def handle_client(conn, addr):
             decrypted = decrypt_message(SECRET_KEY, IV, msg)
             text = decrypted.decode("utf-8")
             broadcast_message(f"{username}: {text}")
-        except:
+        except Exception as e:
+            logger.error(f"Error decrypting message from {username}: {e}")
             break
 
     disconnect_user(username, "client disconnected")

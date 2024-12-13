@@ -99,18 +99,19 @@ class ChatClient:
         # https://stackoverflow.com/questions/16217958/why-do-we-need-socketoptions-so-broadcast-to-enable-broadcast
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         # allow multiple clients on same machine
-        self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         system = platform.system()
         if system == "Windows":
             try:
                 self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             except AttributeError:
                 logger.warning("SO_REUSEADDR not supported on this system.")
-        else: # Unix-like systems
+        else:  # Unix-like systems
             try:
                 self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if hasattr(socket, 'SO_REUSEPORT'):
-                    self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                if hasattr(socket, "SO_REUSEPORT"):
+                    self.udp_socket.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_REUSEPORT, 1
+                    )
             except AttributeError:
                 logger.warning("SO_REUSEPORT not supported on this system.")
         self.udp_socket.bind(("", UDP_PORT))
